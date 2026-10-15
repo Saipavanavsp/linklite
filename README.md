@@ -1,5 +1,7 @@
 # LinkLite
 
+[![tests](https://github.com/Saipavanavsp/linklite/actions/workflows/test.yml/badge.svg)](https://github.com/Saipavanavsp/linklite/actions/workflows/test.yml)
+
 A small URL shortener built with Node.js, Express and SQLite. The two parts I
 cared most about are written by hand instead of pulled from npm:
 
@@ -23,15 +25,50 @@ strings.
 
 ## Demo
 
-| | |
-|---|---|
-| Homepage | ![Homepage](docs/screenshots/01-homepage.png) |
-| Shortened link | ![Shortened link](docs/screenshots/02-shortened-link.png) |
-| Redirect (302 + X-Cache) | ![Redirect](docs/screenshots/03-redirect.png) |
-| Stats page | ![Stats page](docs/screenshots/04-stats-page.png) |
-| Rate limit (429) | ![429 response](docs/screenshots/05-rate-limit-429.png) |
-| Tests passing | ![Tests](docs/screenshots/06-tests-passing.png) |
-| Server terminal | ![Server log](docs/screenshots/07-server-terminal.png) |
+All screenshots come from one real local run of the app (`npm start` on
+port 3000 with the default settings). Every test also runs on GitHub Actions
+on each push; see the badge above.
+
+### Homepage
+
+![Homepage](docs/screenshots/01-homepage.png)
+
+### Shortening links
+
+Four links: two counter codes (`1000`, `1001`), a custom alias (`lru-wiki`),
+and one with an expiry date (`node-intro`). The click counts come from real
+redirects.
+
+![Shortened link and my links table](docs/screenshots/02-shortened-link.png)
+
+### Redirect, cache HIT/MISS, 410 and 404
+
+The first redirect for a new code reads SQLite (`X-Cache: MISS`). The second
+is served from the LRU cache (`X-Cache: HIT`). An expired link returns 410
+and an unknown code returns 404.
+
+![curl redirect output](docs/screenshots/03-redirect.png)
+
+### Stats page
+
+![Stats page](docs/screenshots/04-stats-page.png)
+
+### Rate limiter (429)
+
+12 POSTs in a row to `/api/shorten`. The bucket holds 10 tokens, so
+requests 11 and 12 get `429` with `Retry-After`.
+
+![429 rate limit](docs/screenshots/05-rate-limit-429.png)
+
+### Tests
+
+![45 tests passing](docs/screenshots/06-tests-passing.png)
+
+### Server log
+
+Every request from the run above, with cache hits and misses on redirects.
+
+![Server terminal](docs/screenshots/07-server-terminal.png)
 
 ## Architecture
 
@@ -137,7 +174,7 @@ Full request/response examples are in [docs/api.md](docs/api.md).
 Requires Node.js 22 or newer (it uses `node --env-file-if-exists`).
 
 ```bash
-git clone https://github.com/<your-username>/linklite.git
+git clone https://github.com/Saipavanavsp/linklite.git
 cd linklite
 npm install
 cp .env.example .env      # optional, every value has a default
