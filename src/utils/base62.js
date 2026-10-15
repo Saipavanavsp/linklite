@@ -40,4 +40,4 @@ function decode(str) {
   return num;
 }
 
-module.exports = { encode, decode, ALPHABET };
+module.exports = { encode, decode };

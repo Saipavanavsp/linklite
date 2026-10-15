@@ -34,4 +34,4 @@ function openDb(file) {
   return db;
 }
 
-module.exports = { openDb, COUNTER_START };
+module.exports = { openDb };
