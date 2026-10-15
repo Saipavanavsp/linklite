@@ -1,0 +1,9 @@
+node_modules/
+coverage/
+data/
+*.db
+*.db-journal
+.env
+npm-debug.log*
+.DS_Store
+Thumbs.db
