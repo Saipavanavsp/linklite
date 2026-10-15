@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinkLite</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="container">
+    <h1>LinkLite</h1>
+    <p class="tagline">Paste a long URL, get a short one.</p>
+
+    <form id="shorten-form" class="card">
+      <label for="url">Long URL</label>
+      <input id="url" name="url" type="url" placeholder="https://example.com/some/long/path" required>
+
+      <div class="row">
+        <div>
+          <label for="alias">Custom alias <span class="muted">(optional)</span></label>
+          <input id="alias" name="alias" type="text" placeholder="my-link" pattern="[A-Za-z0-9_\-]{3,30}">
+        </div>
+        <div>
+          <label for="expires">Expires <span class="muted">(optional)</span></label>
+          <input id="expires" name="expires" type="datetime-local">
+        </div>
+      </div>
+
+      <button type="submit">Shorten</button>
+      <p id="message" class="message" role="status"></p>
+    </form>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>My links</h2>
+        <button id="refresh" type="button" class="secondary">Refresh</button>
+      </div>
+      <p id="empty" class="muted">No links yet. Shorten something above.</p>
+      <table id="links" hidden>
+        <thead>
+          <tr>
+            <th>Short link</th>
+            <th>Original</th>
+            <th>Clicks</th>
+            <th>Expires</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #f4f5f7;
+  color: #1f2328;
+  line-height: 1.5;
+}
+
+.container {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 2rem;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.tagline {
+  margin-top: 4px;
+  color: #59636e;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 20px;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin: 12px 0 4px;
+}
+
+input {
+  width: 100%;
+  padding: 9px 10px;
+  font-size: 1rem;
+  border: 1px solid #c4ccd4;
+  border-radius: 6px;
+}
+
+input:focus {
+  outline: 2px solid #2f6feb;
+  outline-offset: -1px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+button {
+  margin-top: 16px;
+  padding: 9px 18px;
+  font-size: 1rem;
+  border: none;
+  border-radius: 6px;
+  background: #2f6feb;
+  color: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1f5bd0;
+}
+
+button.secondary {
+  margin: 0;
+  padding: 5px 12px;
+  font-size: 0.85rem;
+  background: #eef1f4;
+  color: #1f2328;
+}
+
+button.secondary:hover {
+  background: #e1e5ea;
+}
+
+.muted {
+  color: #59636e;
+  font-weight: normal;
+}
+
+.message {
+  min-height: 1.5em;
+  margin: 12px 0 0;
+}
+
+.message.error {
+  color: #cf222e;
+}
+
+.message a {
+  font-weight: 600;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid #eaeef2;
+}
+
+td.original {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.expired {
+  color: #cf222e;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  margin: 0;
+}
+
+dt {
+  font-weight: 600;
+}
+
+dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+@media (max-width: 560px) {
+  .row {
+    grid-template-columns: 1fr;
+  }
+
+  td.original {
+    max-width: 120px;
+  }
+}

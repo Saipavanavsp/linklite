@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Link stats - LinkLite</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="container">
+    <p><a href="/">&larr; Back</a></p>
+    <h1>Link stats</h1>
+
+    <section class="card">
+      <p id="status" class="muted">Loading...</p>
+      <dl id="details" hidden>
+        <dt>Short link</dt>
+        <dd><a id="short" href="#" target="_blank" rel="noopener"></a></dd>
+        <dt>Original URL</dt>
+        <dd id="original"></dd>
+        <dt>Clicks</dt>
+        <dd id="clicks"></dd>
+        <dt>Created</dt>
+        <dd id="created"></dd>
+        <dt>Expires</dt>
+        <dd id="expires"></dd>
+      </dl>
+    </section>
+  </main>
+
+  <script src="stats.js"></script>
+</body>
+</html>
