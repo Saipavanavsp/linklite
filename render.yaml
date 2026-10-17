@@ -1,0 +1,17 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# BASE_URL is not set here. Add it in the dashboard after the first deploy,
+# once the service URL (https://<name>.onrender.com) is known.
+services:
+  - type: web
+    name: linklite
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DB_PATH
+        value: ./data/linklite.db

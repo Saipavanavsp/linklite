@@ -22,7 +22,7 @@ const app = createApp({
   logRequests: true,
 });
 
-const server = app.listen(port, () => {
+const server = app.listen(port, '0.0.0.0', () => {
   console.log(`LinkLite running on http://localhost:${port}`);
 });
 
