@@ -12,6 +12,18 @@ cared most about are written by hand instead of pulled from npm:
 Short codes come from an auto-increment counter encoded in base62, not random
 strings.
 
+## Live demo
+
+**https://linklite-8fe6.onrender.com**
+
+Hosted on Render's free tier, so keep in mind:
+
+- The instance sleeps after about 15 minutes without traffic. The first
+  request after that can take up to a minute.
+- There is no persistent disk on the free plan. The SQLite database is wiped
+  whenever the service restarts, redeploys or spins down, so links you create
+  there are temporary.
+
 ## Features
 
 - `POST /api/shorten` with optional custom alias and optional expiry date
