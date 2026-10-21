@@ -37,11 +37,11 @@ function checkExpiry(expiresAt) {
   return null;
 }
 
-function apiRouter({ links, cache, baseUrl, shortenLimit }) {
+function apiRouter({ links, cache, baseUrl, shortenLimit, limiterOptions = {} }) {
   const router = express.Router();
   const shortUrl = (code) => `${baseUrl}/${code}`;
   // one bucket per IP shared by every write: create, update and delete
-  const writeLimit = rateLimiter(shortenLimit);
+  const writeLimit = rateLimiter({ ...shortenLimit, ...limiterOptions, name: 'shorten' });
 
   router.post('/shorten', writeLimit, async (req, res) => {
     const { url, alias, expiresAt } = req.body || {};

@@ -73,11 +73,12 @@ function createApp(options = {}) {
     });
   }
 
-  app.use(rateLimiter(rateLimit));
+  const limiterOptions = { redis, logger };
+  app.use(rateLimiter({ ...rateLimit, ...limiterOptions, name: 'general' }));
   app.use(express.json({ limit: '10kb' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
-  app.use('/api', apiRouter({ links, cache, baseUrl, shortenLimit }));
+  app.use('/api', apiRouter({ links, cache, baseUrl, shortenLimit, limiterOptions }));
   app.use(redirectRouter({ links }));
 
   app.use((req, res) => {
