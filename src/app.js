@@ -6,7 +6,9 @@ const { TieredCache } = require('./cache/tieredCache');
 const { createRedisClient } = require('./redis');
 const throttledLog = require('./utils/throttledLog');
 const { createLinkService } = require('./services/linkService');
+const { createMetrics } = require('./metrics');
 const rateLimiter = require('./middleware/rateLimiter');
+const opsRouter = require('./routes/ops');
 const apiRouter = require('./routes/api');
 const redirectRouter = require('./routes/redirect');
 
@@ -31,6 +33,7 @@ function createApp(options = {}) {
     trustProxy = false,
     logRequests = false,
     logger = console,
+    instanceId,
   } = options;
 
   const repo =
@@ -58,22 +61,37 @@ function createApp(options = {}) {
 
   const links = createLinkService(repo, cache);
 
+  const metrics = createMetrics({ instanceId });
+
   const app = express();
   app.disable('x-powered-by');
   if (trustProxy) app.set('trust proxy', 1);
+  app.locals.shuttingDown = false;
+
+  // lets you see which container answered when running behind nginx
+  if (instanceId) {
+    app.use((req, res, next) => {
+      res.set('X-Instance', instanceId);
+      next();
+    });
+  }
+
+  app.use(opsRouter({ repo, redis, cache, metrics, isShuttingDown: () => app.locals.shuttingDown }));
+  app.use(metrics.middleware);
 
   if (logRequests) {
     app.use((req, res, next) => {
       const start = Date.now();
       res.on('finish', () => {
-        const cacheInfo = res.get('X-Cache') ? ` cache=${res.get('X-Cache')}` : '';
+        const level = res.get('X-Cache-Level') ? `(${res.get('X-Cache-Level')})` : '';
+        const cacheInfo = res.get('X-Cache') ? ` cache=${res.get('X-Cache')}${level}` : '';
         console.log(`${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - start}ms${cacheInfo}`);
       });
       next();
     });
   }
 
-  const limiterOptions = { redis, logger };
+  const limiterOptions = { redis, logger, onLimited: metrics.recordRateLimited };
   app.use(rateLimiter({ ...rateLimit, ...limiterOptions, name: 'general' }));
   app.use(express.json({ limit: '10kb' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));

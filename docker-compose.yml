@@ -1,0 +1,105 @@
+# nginx -> 2 app replicas -> postgres + redis
+#
+#   docker compose up -d --build
+#   open http://localhost:8080
+#
+# Settings can be changed in a .env file next to this one (see .env.example).
+name: linklite
+
+x-app: &app
+  build: .
+  image: linklite:local
+  restart: unless-stopped
+  environment: &app-env
+    PORT: "3000"
+    BASE_URL: ${BASE_URL:-http://localhost:8080}
+    DB_DRIVER: postgres
+    DATABASE_URL: postgres://${POSTGRES_USER:-linklite}:${POSTGRES_PASSWORD:-linklite}@postgres:5432/${POSTGRES_DB:-linklite}
+    REDIS_URL: redis://redis:6379
+    TRUST_PROXY: "1"
+    CACHE_SIZE: ${CACHE_SIZE:-1000}
+    CACHE_TTL_SEC: ${CACHE_TTL_SEC:-3600}
+    L1_TTL_SEC: ${L1_TTL_SEC:-60}
+    RATE_LIMIT_CAPACITY: ${RATE_LIMIT_CAPACITY:-60}
+    RATE_LIMIT_REFILL: ${RATE_LIMIT_REFILL:-1}
+    SHORTEN_LIMIT_CAPACITY: ${SHORTEN_LIMIT_CAPACITY:-10}
+    SHORTEN_LIMIT_REFILL: ${SHORTEN_LIMIT_REFILL:-0.2}
+    LOG_REQUESTS: ${LOG_REQUESTS:-1}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+  stop_grace_period: 15s
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-linklite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-linklite}
+      POSTGRES_DB: ${POSTGRES_DB:-linklite}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # every key the app writes has a ttl, so volatile-lru can evict any of them
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # runs the sql migrations once, then exits; the apps wait for it
+  migrate:
+    <<: *app
+    command: ["node", "scripts/migrate.js"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app1:
+    <<: *app
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app1
+
+  app2:
+    <<: *app
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app2
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      app1:
+        condition: service_healthy
+      app2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  pgdata:
+  redisdata:

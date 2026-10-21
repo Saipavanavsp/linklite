@@ -3,7 +3,7 @@ const rateLimiter = require('../middleware/rateLimiter');
 const { isExpired } = require('../services/linkService');
 
 const ALIAS_PATTERN = /^[A-Za-z0-9_-]{3,30}$/;
-const RESERVED = new Set(['api', 'index', 'stats']);
+const RESERVED = new Set(['api', 'index', 'stats', 'healthz', 'metrics']);
 const MAX_URL_LENGTH = 2048;
 
 function checkUrl(value) {

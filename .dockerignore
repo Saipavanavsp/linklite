@@ -1,0 +1,13 @@
+node_modules
+npm-debug.log*
+coverage
+data
+*.db
+.env
+.git
+.github
+docs
+tests
+loadtest-results
+Dockerfile
+docker-compose*.yml

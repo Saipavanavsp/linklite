@@ -26,19 +26,48 @@ const app = createApp({
     refillPerSec: num(env.SHORTEN_LIMIT_REFILL, 0.2),
   },
   trustProxy: env.TRUST_PROXY === '1',
-  logRequests: true,
+  logRequests: env.LOG_REQUESTS !== '0',
+  instanceId: env.INSTANCE_ID || undefined,
 });
+
+const shutdownTimeoutMs = num(env.SHUTDOWN_TIMEOUT_MS, 10_000);
 
 const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`LinkLite running on http://localhost:${port}`);
+  const backends = `db=${app.locals.repo.driver} redis=${app.locals.redis ? 'on' : 'off'}`;
+  console.log(`LinkLite running on http://localhost:${port} (${backends})`);
 });
 
-function shutdown() {
+// nginx keeps idle upstream connections open. If node closed them first,
+// nginx could send a request on a socket that is already gone.
+server.keepAliveTimeout = 65_000;
+
+// Graceful shutdown (docker stop sends SIGTERM):
+// 1. /healthz starts returning 503 so the load balancer stops sending traffic
+// 2. stop accepting connections, close idle keep-alive sockets
+// 3. wait for in-flight requests, then close Redis and the DB pool
+// 4. if that takes longer than SHUTDOWN_TIMEOUT_MS, exit anyway
+let stopping = false;
+function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  app.locals.shuttingDown = true;
+  console.log(`${signal} received, draining connections`);
+
+  setTimeout(() => {
+    console.error('shutdown timed out, exiting');
+    process.exit(1);
+  }, shutdownTimeoutMs).unref();
+
   server.close(async () => {
-    await app.locals.close();
-    process.exit(0);
+    try {
+      await app.locals.close();
+    } finally {
+      console.log('shutdown complete');
+      process.exit(0);
+    }
   });
+  server.closeIdleConnections();
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
