@@ -41,7 +41,7 @@ function apiRouter({ links, cache, baseUrl, shortenLimit }) {
   const router = express.Router();
   const shortUrl = (code) => `${baseUrl}/${code}`;
 
-  router.post('/shorten', rateLimiter(shortenLimit), (req, res) => {
+  router.post('/shorten', rateLimiter(shortenLimit), async (req, res) => {
     const { url, alias, expiresAt } = req.body || {};
     const hasAlias = alias !== undefined && alias !== null && alias !== '';
     const hasExpiry = expiresAt !== undefined && expiresAt !== null && expiresAt !== '';
@@ -50,7 +50,7 @@ function apiRouter({ links, cache, baseUrl, shortenLimit }) {
       checkUrl(url) || (hasAlias && checkAlias(alias)) || (hasExpiry && checkExpiry(expiresAt));
     if (error) return res.status(400).json({ error });
 
-    const link = links.create({
+    const link = await links.create({
       url: url.trim(),
       alias: hasAlias ? alias : null,
       expiresAt: hasExpiry ? new Date(expiresAt).toISOString() : null,
@@ -59,8 +59,8 @@ function apiRouter({ links, cache, baseUrl, shortenLimit }) {
     res.status(201).json({ ...link, shortUrl: shortUrl(link.code) });
   });
 
-  router.get('/stats/:code', (req, res) => {
-    const link = links.getLink(req.params.code);
+  router.get('/stats/:code', async (req, res) => {
+    const link = await links.getLink(req.params.code);
     if (!link) return res.status(404).json({ error: 'Link not found' });
 
     res.json({ ...link, shortUrl: shortUrl(link.code), expired: isExpired(link.expiresAt) });

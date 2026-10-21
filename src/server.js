@@ -7,7 +7,11 @@ const num = (value, fallback) => (value === undefined || value === '' ? fallback
 const port = num(env.PORT, 3000);
 
 const app = createApp({
+  dbDriver: env.DB_DRIVER || 'sqlite',
   dbPath: env.DB_PATH || path.join(__dirname, '..', 'data', 'linklite.db'),
+  databaseUrl: env.DATABASE_URL,
+  idBlockSize: num(env.ID_BLOCK_SIZE, 100),
+  pgPoolMax: num(env.PG_POOL_MAX, 10),
   baseUrl: env.BASE_URL || `http://localhost:${port}`,
   cacheSize: num(env.CACHE_SIZE, 1000),
   rateLimit: {
@@ -27,8 +31,8 @@ const server = app.listen(port, '0.0.0.0', () => {
 });
 
 function shutdown() {
-  server.close(() => {
-    app.locals.db.close();
+  server.close(async () => {
+    await app.locals.close();
     process.exit(0);
   });
 }

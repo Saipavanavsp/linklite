@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "dev": "node --env-file-if-exists=.env --watch src/server.js",
-    "test": "jest"
+    "test": "jest",
+    "migrate": "node --env-file-if-exists=.env scripts/migrate.js"
   },
   "keywords": [
     "url-shortener",
@@ -24,9 +25,12 @@
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
-    "express": "^5.3.0"
+    "express": "^5.3.0",
+    "ioredis": "^5.11.1",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
+    "autocannon": "^8.0.0",
     "jest": "^30.5.2",
     "supertest": "^7.3.1"
   },

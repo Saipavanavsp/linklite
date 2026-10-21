@@ -1,6 +1,6 @@
 const path = require('path');
 const express = require('express');
-const { openDb } = require('./db');
+const { createRepository } = require('./storage');
 const LRUCache = require('./utils/lruCache');
 const { createLinkService } = require('./services/linkService');
 const rateLimiter = require('./middleware/rateLimiter');
@@ -10,6 +10,11 @@ const redirectRouter = require('./routes/redirect');
 function createApp(options = {}) {
   const {
     dbPath = ':memory:',
+    dbDriver = 'sqlite',
+    databaseUrl,
+    idBlockSize,
+    pgPoolMax,
+    repo: injectedRepo,
     baseUrl = 'http://localhost:3000',
     cacheSize = 1000,
     rateLimit = { capacity: 60, refillPerSec: 1 },
@@ -18,9 +23,11 @@ function createApp(options = {}) {
     logRequests = false,
   } = options;
 
-  const db = openDb(dbPath);
+  const repo =
+    injectedRepo ||
+    createRepository({ driver: dbDriver, sqlitePath: dbPath, databaseUrl, idBlockSize, poolMax: pgPoolMax });
   const cache = new LRUCache(cacheSize);
-  const links = createLinkService(db, cache);
+  const links = createLinkService(repo, cache);
 
   const app = express();
   app.disable('x-powered-by');
@@ -55,7 +62,10 @@ function createApp(options = {}) {
     res.status(status).json({ error: status >= 500 ? 'Internal server error' : err.message });
   });
 
-  app.locals.db = db;
+  // the raw sqlite handle is still exposed (the tests use it to tweak rows)
+  app.locals.db = repo.db;
+  app.locals.repo = repo;
+  app.locals.close = () => repo.close();
   return app;
 }
 
