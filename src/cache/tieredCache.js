@@ -1,4 +1,5 @@
 const throttledLog = require('../utils/throttledLog');
+const { closeRedis } = require('../redis');
 
 const KEY_PREFIX = 'linklite:link:';
 const INVALIDATE_CHANNEL = 'linklite:invalidate';
@@ -105,7 +106,7 @@ class TieredCache {
   }
 
   async close() {
-    if (this.subscriber) await this.subscriber.quit().catch(() => {});
+    if (this.subscriber) await closeRedis(this.subscriber);
   }
 
   stats() {

@@ -1,0 +1,17 @@
+# Raises the rate limits so a load test from one machine (one ip) measures
+# the app and the caches instead of a wall of 429s, and turns off per-request
+# logging. Use it on top of the normal file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d --build
+x-loadtest-env: &loadtest-env
+  RATE_LIMIT_CAPACITY: "1000000"
+  RATE_LIMIT_REFILL: "1000000"
+  SHORTEN_LIMIT_CAPACITY: "100000"
+  SHORTEN_LIMIT_REFILL: "100000"
+  LOG_REQUESTS: "0"
+
+services:
+  app1:
+    environment: *loadtest-env
+  app2:
+    environment: *loadtest-env

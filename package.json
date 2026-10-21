@@ -7,7 +7,9 @@
     "start": "node --env-file-if-exists=.env src/server.js",
     "dev": "node --env-file-if-exists=.env --watch src/server.js",
     "test": "jest",
-    "migrate": "node --env-file-if-exists=.env scripts/migrate.js"
+    "test:integration": "jest --config jest.integration.config.js --runInBand",
+    "migrate": "node --env-file-if-exists=.env scripts/migrate.js",
+    "loadtest": "node scripts/loadtest.js"
   },
   "keywords": [
     "url-shortener",
@@ -21,7 +23,11 @@
     "node": ">=22"
   },
   "jest": {
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/tests/integration/"
+    ]
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

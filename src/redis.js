@@ -23,4 +23,16 @@ function createRedisClient(url, { logger = console } = {}) {
   return client;
 }
 
-module.exports = { createRedisClient };
+// QUIT waits for Redis to answer. If Redis is unreachable that never happens
+// and the client keeps reconnecting, which would keep the process alive, so
+// in that case just drop the connection.
+async function closeRedis(client) {
+  if (!client || client.status === 'end') return;
+  if (client.status === 'ready') {
+    await client.quit().catch(() => client.disconnect());
+  } else {
+    client.disconnect();
+  }
+}
+
+module.exports = { createRedisClient, closeRedis };

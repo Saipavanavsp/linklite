@@ -3,7 +3,7 @@ const express = require('express');
 const { createRepository } = require('./storage');
 const LRUCache = require('./utils/lruCache');
 const { TieredCache } = require('./cache/tieredCache');
-const { createRedisClient } = require('./redis');
+const { createRedisClient, closeRedis } = require('./redis');
 const throttledLog = require('./utils/throttledLog');
 const { createLinkService } = require('./services/linkService');
 const { createMetrics } = require('./metrics');
@@ -118,7 +118,7 @@ function createApp(options = {}) {
   app.locals.ready = subscribed;
   app.locals.close = async () => {
     await cache.close();
-    if (redis && !injectedRedis) await redis.quit().catch(() => {});
+    if (!injectedRedis) await closeRedis(redis);
     await repo.close();
   };
   return app;

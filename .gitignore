@@ -4,6 +4,7 @@ data/
 *.db
 *.db-journal
 .env
+loadtest-results/
 npm-debug.log*
 .DS_Store
 Thumbs.db
