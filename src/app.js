@@ -2,6 +2,9 @@ const path = require('path');
 const express = require('express');
 const { createRepository } = require('./storage');
 const LRUCache = require('./utils/lruCache');
+const { TieredCache } = require('./cache/tieredCache');
+const { createRedisClient } = require('./redis');
+const throttledLog = require('./utils/throttledLog');
 const { createLinkService } = require('./services/linkService');
 const rateLimiter = require('./middleware/rateLimiter');
 const apiRouter = require('./routes/api');
@@ -16,17 +19,43 @@ function createApp(options = {}) {
     pgPoolMax,
     repo: injectedRepo,
     baseUrl = 'http://localhost:3000',
+    // either a ready ioredis client (the caller closes it) or a url (we own it).
+    // Neither means no Redis: L1 cache only and in-memory rate limiting.
+    redis: injectedRedis = null,
+    redisUrl,
     cacheSize = 1000,
+    cacheTtlSec = 3600,
+    l1TtlSec = 60,
     rateLimit = { capacity: 60, refillPerSec: 1 },
     shortenLimit = { capacity: 10, refillPerSec: 0.2 },
     trustProxy = false,
     logRequests = false,
+    logger = console,
   } = options;
 
   const repo =
     injectedRepo ||
     createRepository({ driver: dbDriver, sqlitePath: dbPath, databaseUrl, idBlockSize, poolMax: pgPoolMax });
-  const cache = new LRUCache(cacheSize);
+
+  const redis = injectedRedis || (redisUrl ? createRedisClient(redisUrl, { logger }) : null);
+  const cache = new TieredCache({
+    l1: new LRUCache(cacheSize),
+    redis,
+    ttlSec: cacheTtlSec,
+    l1TtlSec,
+    logger,
+  });
+
+  let subscribed = Promise.resolve();
+  if (redis) {
+    // the subscriber has its own connection and is allowed to queue the
+    // SUBSCRIBE until Redis is reachable
+    const subscriber = redis.duplicate({ enableOfflineQueue: true });
+    const warn = throttledLog(logger.warn.bind(logger));
+    subscriber.on('error', (err) => warn('sub-error', `[redis subscriber] ${err.message}`));
+    subscribed = cache.subscribe(subscriber);
+  }
+
   const links = createLinkService(repo, cache);
 
   const app = express();
@@ -65,7 +94,14 @@ function createApp(options = {}) {
   // the raw sqlite handle is still exposed (the tests use it to tweak rows)
   app.locals.db = repo.db;
   app.locals.repo = repo;
-  app.locals.close = () => repo.close();
+  app.locals.cache = cache;
+  app.locals.redis = redis;
+  app.locals.ready = subscribed;
+  app.locals.close = async () => {
+    await cache.close();
+    if (redis && !injectedRedis) await redis.quit().catch(() => {});
+    await repo.close();
+  };
   return app;
 }
 

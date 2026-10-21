@@ -13,7 +13,10 @@ const app = createApp({
   idBlockSize: num(env.ID_BLOCK_SIZE, 100),
   pgPoolMax: num(env.PG_POOL_MAX, 10),
   baseUrl: env.BASE_URL || `http://localhost:${port}`,
+  redisUrl: env.REDIS_URL || undefined,
   cacheSize: num(env.CACHE_SIZE, 1000),
+  cacheTtlSec: num(env.CACHE_TTL_SEC, 3600),
+  l1TtlSec: num(env.L1_TTL_SEC, 60),
   rateLimit: {
     capacity: num(env.RATE_LIMIT_CAPACITY, 60),
     refillPerSec: num(env.RATE_LIMIT_REFILL, 1),

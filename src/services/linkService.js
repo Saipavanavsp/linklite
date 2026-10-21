@@ -1,23 +1,32 @@
+// Only what a redirect needs goes into the cache.
+function cacheEntry(link) {
+  return { url: link.url, expiresAt: link.expiresAt };
+}
+
 function createLinkService(repo, cache) {
   async function create(input) {
-    return repo.createLink(input);
+    const link = await repo.createLink(input);
+    // Misses are never cached, so there is no stale "not found" entry to
+    // clear. Warming L2 lets the first redirect on any instance skip the DB.
+    await cache.setShared(link.code, cacheEntry(link));
+    return link;
   }
 
-  // The cache only holds what a redirect needs. Links never change after
-  // creation, so there is nothing to invalidate. Misses are not cached,
-  // otherwise a code created later would keep returning 404.
+  // Cache-aside: try the cache, fall back to the DB and fill the cache.
+  // Misses are not cached, otherwise a code created later would keep
+  // returning 404.
   async function resolve(code) {
-    let target = cache.get(code);
-    const cacheHit = target !== undefined;
-
-    if (!cacheHit) {
-      const link = await repo.findByCode(code);
-      if (!link) return { target: null, cacheHit };
-      target = { url: link.url, expiresAt: link.expiresAt };
-      cache.put(code, target);
+    const cached = await cache.get(code);
+    if (cached.value !== undefined) {
+      return { target: cached.value, cacheHit: true, level: cached.level };
     }
 
-    return { target, cacheHit };
+    const link = await repo.findByCode(code);
+    if (!link) return { target: null, cacheHit: false, level: null };
+
+    const target = cacheEntry(link);
+    await cache.set(code, target);
+    return { target, cacheHit: false, level: null };
   }
 
   async function recordClick(code) {
@@ -28,7 +37,20 @@ function createLinkService(repo, cache) {
     return repo.findByCode(code);
   }
 
-  return { create, resolve, recordClick, getLink };
+  // Write to the DB first, then drop the cached copies everywhere.
+  async function update(code, fields) {
+    const link = await repo.updateLink(code, fields);
+    if (link) await cache.invalidate(code);
+    return link;
+  }
+
+  async function remove(code) {
+    const deleted = await repo.deleteLink(code);
+    if (deleted) await cache.invalidate(code);
+    return deleted;
+  }
+
+  return { create, resolve, recordClick, getLink, update, remove };
 }
 
 function isExpired(expiresAt, now = Date.now()) {

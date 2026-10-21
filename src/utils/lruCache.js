@@ -1,7 +1,8 @@
 class Node {
-  constructor(key, value) {
+  constructor(key, value, expiresAt) {
     this.key = key;
     this.value = value;
+    this.expiresAt = expiresAt; // ms timestamp, or Infinity for no ttl
     this.prev = null;
     this.next = null;
   }
@@ -10,12 +11,17 @@ class Node {
 // Map gives O(1) lookup, the linked list keeps usage order.
 // Most recently used sits right after head, least recently used right before tail.
 // head and tail are dummy nodes so we never have to null-check neighbours.
+//
+// Entries can optionally have a ttl. Expired entries are dropped lazily when
+// someone reads them (and count as a miss), the same way the token bucket
+// refills lazily instead of running a timer.
 class LRUCache {
-  constructor(capacity) {
+  constructor(capacity, { now = Date.now } = {}) {
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new RangeError('capacity must be a positive integer');
     }
     this.capacity = capacity;
+    this.now = now;
     this.map = new Map();
     this.head = new Node(null, null);
     this.tail = new Node(null, null);
@@ -35,16 +41,24 @@ class LRUCache {
       this.misses++;
       return undefined;
     }
+    if (node.expiresAt <= this.now()) {
+      this._unlink(node);
+      this.map.delete(key);
+      this.misses++;
+      return undefined;
+    }
     this.hits++;
     this._unlink(node);
     this._addToFront(node);
     return node.value;
   }
 
-  put(key, value) {
+  put(key, value, ttlMs) {
+    const expiresAt = ttlMs === undefined ? Infinity : this.now() + ttlMs;
     const existing = this.map.get(key);
     if (existing) {
       existing.value = value;
+      existing.expiresAt = expiresAt;
       this._unlink(existing);
       this._addToFront(existing);
       return;
@@ -56,13 +70,20 @@ class LRUCache {
       this.map.delete(lru.key);
     }
 
-    const node = new Node(key, value);
+    const node = new Node(key, value, expiresAt);
     this.map.set(key, node);
     this._addToFront(node);
   }
 
   has(key) {
-    return this.map.has(key);
+    const node = this.map.get(key);
+    return Boolean(node) && node.expiresAt > this.now();
+  }
+
+  clear() {
+    this.map.clear();
+    this.head.next = this.tail;
+    this.tail.prev = this.head;
   }
 
   delete(key) {

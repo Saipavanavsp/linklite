@@ -12,8 +12,9 @@ function redirectRouter({ links }) {
       return res.status(404).json({ error: 'Link not found' });
     }
 
-    const { target, cacheHit } = await links.resolve(code);
+    const { target, cacheHit, level } = await links.resolve(code);
     res.set('X-Cache', cacheHit ? 'HIT' : 'MISS');
+    if (level) res.set('X-Cache-Level', level);
 
     if (!target) return res.status(404).json({ error: 'Link not found' });
     if (isExpired(target.expiresAt)) return res.status(410).json({ error: 'Link has expired' });

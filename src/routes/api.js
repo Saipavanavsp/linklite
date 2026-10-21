@@ -40,8 +40,10 @@ function checkExpiry(expiresAt) {
 function apiRouter({ links, cache, baseUrl, shortenLimit }) {
   const router = express.Router();
   const shortUrl = (code) => `${baseUrl}/${code}`;
+  // one bucket per IP shared by every write: create, update and delete
+  const writeLimit = rateLimiter(shortenLimit);
 
-  router.post('/shorten', rateLimiter(shortenLimit), async (req, res) => {
+  router.post('/shorten', writeLimit, async (req, res) => {
     const { url, alias, expiresAt } = req.body || {};
     const hasAlias = alias !== undefined && alias !== null && alias !== '';
     const hasExpiry = expiresAt !== undefined && expiresAt !== null && expiresAt !== '';
@@ -64,6 +66,40 @@ function apiRouter({ links, cache, baseUrl, shortenLimit }) {
     if (!link) return res.status(404).json({ error: 'Link not found' });
 
     res.json({ ...link, shortUrl: shortUrl(link.code), expired: isExpired(link.expiresAt) });
+  });
+
+  // Change the target url and/or the expiry. expiresAt: null removes the expiry.
+  router.patch('/links/:code', writeLimit, async (req, res) => {
+    const { url, expiresAt } = req.body || {};
+    const changes = {};
+
+    if (url !== undefined) {
+      const error = checkUrl(url);
+      if (error) return res.status(400).json({ error });
+      changes.url = url.trim();
+    }
+    if (expiresAt !== undefined) {
+      if (expiresAt === null || expiresAt === '') {
+        changes.expiresAt = null;
+      } else {
+        const error = checkExpiry(expiresAt);
+        if (error) return res.status(400).json({ error });
+        changes.expiresAt = new Date(expiresAt).toISOString();
+      }
+    }
+    if (Object.keys(changes).length === 0) {
+      return res.status(400).json({ error: 'nothing to update, send url and/or expiresAt' });
+    }
+
+    const link = await links.update(req.params.code, changes);
+    if (!link) return res.status(404).json({ error: 'Link not found' });
+    res.json({ ...link, shortUrl: shortUrl(link.code), expired: isExpired(link.expiresAt) });
+  });
+
+  router.delete('/links/:code', writeLimit, async (req, res) => {
+    const deleted = await links.remove(req.params.code);
+    if (!deleted) return res.status(404).json({ error: 'Link not found' });
+    res.status(204).end();
   });
 
   router.get('/cache-stats', (req, res) => {
