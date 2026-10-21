@@ -15,7 +15,10 @@
     "url-shortener",
     "lru-cache",
     "rate-limiter",
-    "express"
+    "express",
+    "redis",
+    "postgresql",
+    "docker"
   ],
   "author": "Sai Pavan",
   "license": "MIT",

@@ -1,0 +1,10 @@
+# Caddy gets and renews a Let's Encrypt certificate for DOMAIN on its own.
+# DOMAIN and ACME_EMAIL come from the .env file (see docs/DEPLOY_AWS.md).
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy nginx:80
+}
