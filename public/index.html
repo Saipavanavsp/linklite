@@ -4,52 +4,126 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LinkLite</title>
+  <meta name="description" content="LinkLite is a URL shortener built with Node.js and Express. Paste a long link, get a short one, and see how many times it was opened.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="container">
-    <h1>LinkLite</h1>
-    <p class="tagline">Paste a long URL, get a short one.</p>
+  <header class="site-header">
+    <a class="wordmark" href="/">link<span>lite</span></a>
+    <nav aria-label="Project">
+      <a href="https://github.com/Saipavanavsp/linklite">Source on GitHub</a>
+    </nav>
+  </header>
 
-    <form id="shorten-form" class="card">
-      <label for="url">Long URL</label>
-      <input id="url" name="url" type="url" placeholder="https://example.com/some/long/path" required>
+  <main class="page">
+    <section class="intro" aria-labelledby="title">
+      <h1 id="title">Shorten a link</h1>
+      <p class="lede">Paste a long URL. You get a short one that redirects to it, and a count of how many times it was opened.</p>
+    </section>
 
-      <div class="row">
-        <div>
-          <label for="alias">Custom alias <span class="muted">(optional)</span></label>
-          <input id="alias" name="alias" type="text" placeholder="my-link" pattern="[A-Za-z0-9_\-]{3,30}">
-        </div>
-        <div>
-          <label for="expires">Expires <span class="muted">(optional)</span></label>
-          <input id="expires" name="expires" type="datetime-local">
-        </div>
+    <form id="shorten-form" class="shorten" novalidate>
+      <label class="field-label" for="url">Long URL</label>
+      <div class="bar">
+        <input id="url" name="url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+               placeholder="https://example.com/a/very/long/path?with=parameters" required>
+        <button type="submit" class="primary">Shorten</button>
       </div>
 
-      <button type="submit">Shorten</button>
-      <p id="message" class="message" role="status"></p>
+      <details class="options">
+        <summary>More options</summary>
+        <div class="option-grid">
+          <div>
+            <label class="field-label" for="alias">Custom ending</label>
+            <div class="prefixed">
+              <span class="prefix" id="host-prefix" aria-hidden="true">/</span>
+              <input id="alias" name="alias" type="text" placeholder="my-link" autocomplete="off"
+                     pattern="[A-Za-z0-9_\-]{3,30}" aria-describedby="alias-hint">
+            </div>
+            <p class="hint" id="alias-hint">3 to 30 letters, numbers, - or _</p>
+          </div>
+          <div>
+            <label class="field-label" for="expires">Stops working after</label>
+            <input id="expires" name="expires" type="datetime-local" aria-describedby="expires-hint">
+            <p class="hint" id="expires-hint">Leave empty to keep it forever</p>
+          </div>
+        </div>
+        <label class="check">
+          <input id="opaque" name="opaque" type="checkbox">
+          <span>
+            Make the code hard to guess
+            <span class="hint">Uses a random 10 character code instead of the next one in the sequence, so nobody finds the link by counting.</span>
+          </span>
+        </label>
+      </details>
+
+      <p id="message" class="message" role="status" aria-live="polite"></p>
     </form>
 
-    <section class="card">
-      <div class="section-head">
-        <h2>My links</h2>
-        <button id="refresh" type="button" class="secondary">Refresh</button>
+    <section id="result" class="result" hidden aria-labelledby="result-title">
+      <h2 id="result-title" class="visually-hidden">Your short link</h2>
+      <p class="fold" id="fold" aria-hidden="true"></p>
+      <p class="short-line">
+        <a id="short-link" class="short-link" href="#" target="_blank" rel="noopener"></a>
+      </p>
+      <p class="dest-line">Goes to <span id="result-dest"></span></p>
+      <div class="result-actions">
+        <button type="button" class="secondary" data-copy-target="short-link">Copy link</button>
+        <a id="result-stats" class="text-link" href="#">See stats</a>
       </div>
-      <p id="empty" class="muted">No links yet. Shorten something above.</p>
-      <table id="links" hidden>
-        <thead>
-          <tr>
-            <th>Short link</th>
-            <th>Original</th>
-            <th>Clicks</th>
-            <th>Expires</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div class="key">
+        <p class="key-title">Edit key</p>
+        <p class="key-text">You need this key to change or delete the link. It's saved in this browser and shown only once, so copy it if you'll manage the link from somewhere else.</p>
+        <div class="key-row">
+          <code id="manage-token"></code>
+          <button type="button" class="secondary small" data-copy-target="manage-token">Copy key</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="links" aria-labelledby="links-title">
+      <div class="links-head">
+        <h2 id="links-title">Links from this browser</h2>
+        <button id="refresh" type="button" class="secondary small">Refresh counts</button>
+      </div>
+      <p id="empty" class="empty">Links you shorten here show up in this list, with their click counts.</p>
+      <ul id="links" class="link-list" hidden></ul>
     </section>
   </main>
+
+  <footer class="site-footer">
+    <p>LinkLite is a URL shortener by Sai Pavan, built with Node.js, Express, PostgreSQL and Redis.
+      The <a href="https://github.com/Saipavanavsp/linklite/blob/main/docs/api.md">API docs</a> show how to use it with curl.</p>
+  </footer>
+
+  <template id="link-row">
+    <li class="link-row">
+      <div class="row-main">
+        <a class="row-code" target="_blank" rel="noopener"></a>
+        <p class="row-dest"></p>
+        <p class="row-meta"></p>
+      </div>
+      <p class="row-clicks"><strong></strong> <span>clicks</span></p>
+      <div class="row-actions">
+        <button type="button" class="link-button" data-action="copy">Copy</button>
+        <a class="link-button" data-action="stats">Stats</a>
+        <button type="button" class="link-button" data-action="edit">Edit</button>
+        <button type="button" class="link-button danger" data-action="delete">Delete</button>
+      </div>
+      <form class="row-edit" hidden>
+        <label class="field-label">New destination
+          <input name="url" type="url" required>
+        </label>
+        <div class="row-edit-actions">
+          <button type="submit" class="primary small">Save</button>
+          <button type="button" class="secondary small" data-action="cancel">Cancel</button>
+        </div>
+      </form>
+    </li>
+  </template>
 
   <script src="app.js"></script>
 </body>

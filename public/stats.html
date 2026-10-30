@@ -4,30 +4,44 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Link stats - LinkLite</title>
+  <meta name="description" content="Click count, destination and expiry for a LinkLite short link.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="container">
-    <p><a href="/">&larr; Back</a></p>
-    <h1>Link stats</h1>
+  <header class="site-header">
+    <a class="wordmark" href="/">link<span>lite</span></a>
+    <nav aria-label="Project">
+      <a href="https://github.com/Saipavanavsp/linklite">Source on GitHub</a>
+    </nav>
+  </header>
 
-    <section class="card">
-      <p id="status" class="muted">Loading...</p>
-      <dl id="details" hidden>
-        <dt>Short link</dt>
-        <dd><a id="short" href="#" target="_blank" rel="noopener"></a></dd>
-        <dt>Original URL</dt>
-        <dd id="original"></dd>
-        <dt>Clicks</dt>
-        <dd id="clicks"></dd>
-        <dt>Created</dt>
-        <dd id="created"></dd>
-        <dt>Expires</dt>
-        <dd id="expires"></dd>
-      </dl>
+  <main class="page">
+    <a class="back" href="/">Shorten another link</a>
+
+    <section class="stat-hero" aria-live="polite">
+      <h1 id="code" class="stat-code">Link stats</h1>
+      <p id="status" class="stat-clicks">Loading...</p>
     </section>
+
+    <dl id="details" class="details" hidden>
+      <dt>Short link</dt>
+      <dd><a id="short" href="#" target="_blank" rel="noopener"></a></dd>
+      <dt>Goes to</dt>
+      <dd id="original"></dd>
+      <dt>Created</dt>
+      <dd id="created"></dd>
+      <dt>Stops working</dt>
+      <dd id="expires"></dd>
+    </dl>
   </main>
+
+  <footer class="site-footer">
+    <p>Counts can trail real clicks by about a second while they're batched into the database.</p>
+  </footer>
 
   <script src="stats.js"></script>
 </body>
