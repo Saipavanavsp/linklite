@@ -43,6 +43,54 @@ HTTP/1.1 409 Conflict
 {"error":"Alias \"base62-wiki\" is already taken"}
 ```
 
+Every create response also has a `manageToken` (32 characters, base64url). It's
+the only time the token is shown; keep it to edit or delete the link later.
+The real tokens are replaced with `<manageToken>` in these examples. This one is from the
+Docker Compose setup:
+
+```bash
+curl -X POST http://localhost:8080/api/shorten \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://nodejs.org/en/docs","alias":"node-docs"}'
+```
+
+```
+HTTP/1.1 201 Created
+{"code":"node-docs","url":"https://nodejs.org/en/docs","clicks":0,"custom":true,
+ "createdAt":"2026-10-30T12:26:12.994Z","expiresAt":null,
+ "shortUrl":"http://localhost:8080/node-docs","manageToken":"<manageToken>"}
+```
+
+A random code instead of the next counter value:
+
+```bash
+curl -X POST http://localhost:8080/api/shorten \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/private-doc","opaque":true}'
+```
+
+```
+HTTP/1.1 201 Created
+{"code":"vHmfPSLzNE","url":"https://example.com/private-doc","clicks":0,"custom":false,
+ "createdAt":"2026-10-30T12:26:13.011Z","expiresAt":null,
+ "shortUrl":"http://localhost:8080/vHmfPSLzNE","manageToken":"<manageToken>"}
+```
+
+Targets that are refused:
+
+```
+POST {"url":"http://169.254.169.254/latest/meta-data/"}
+HTTP/1.1 400 Bad Request
+{"error":"urls pointing to localhost or private networks are not allowed"}
+
+POST {"url":"https://paypal.com@evil.example/"}
+HTTP/1.1 400 Bad Request
+{"error":"urls with a username or password are not allowed"}
+```
+
+With `SAFE_BROWSING_API_KEY` set, a target Google has flagged gets
+`400 {"error":"url is flagged by Google Safe Browsing (SOCIAL_ENGINEERING)"}`.
+
 ## Redirect
 
 ```bash
@@ -120,15 +168,18 @@ X-Cache-Level: L2
 
 ## Update a link
 
+Needs the `manageToken` from the create response.
+
 ```bash
 curl -X PATCH http://localhost:8080/api/links/node-docs \
+  -H "Authorization: Bearer <manageToken>" \
   -H "Content-Type: application/json" \
   -d '{"url":"https://nodejs.org/api/","expiresAt":"2027-01-01T00:00:00Z"}'
 ```
 
 ```
-{"code":"node-docs","url":"https://nodejs.org/api/","clicks":2,"custom":true,
- "createdAt":"2026-10-21T05:22:33.571Z","expiresAt":"2027-01-01T00:00:00.000Z",
+{"code":"node-docs","url":"https://nodejs.org/api/","clicks":0,"custom":true,
+ "createdAt":"2026-10-30T12:26:12.994Z","expiresAt":"2027-01-01T00:00:00.000Z",
  "shortUrl":"http://localhost:8080/node-docs","expired":false}
 ```
 
@@ -136,15 +187,29 @@ Both fields are optional, but at least one is required. `"expiresAt": null`
 removes the expiry. The cached copies are removed from Redis and from every
 instance's L1.
 
+Without the token, or with the wrong one:
+
+```
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer
+{"error":"management token required (Authorization: Bearer <token>)"}
+
+HTTP/1.1 403 Forbidden
+{"error":"management token does not match this link"}
+```
+
 ## Delete a link
 
 ```bash
-curl -i -X DELETE http://localhost:8080/api/links/node-docs
+curl -i -X DELETE http://localhost:8080/api/links/node-docs \
+  -H "Authorization: Bearer <manageToken>"
 ```
 
 ```
 HTTP/1.1 204 No Content
 ```
+
+Same `401`/`403` rules as `PATCH`.
 
 ```
 GET /node-docs -> 404 {"error":"Link not found"}
@@ -183,6 +248,20 @@ curl http://localhost:8080/metrics
  "storage":{"driver":"postgres"},
  "redis":{"enabled":true,"status":"ready"}}
 ```
+
+It also has `clicks` and `safeBrowsing` sections. This is app1 after the
+load tests in the README:
+
+```
+"clicks":{"mode":"redis-buffered","buffered":323340,"direct":0,"flushedBatches":180,
+          "flushedClicks":80094,"errors":0},
+"safeBrowsing":{"enabled":false}
+```
+
+`buffered` is clicks this instance put into Redis; `flushedClicks` is what
+this instance moved to Postgres. They differ because whichever instance
+renames the pending hash first flushes everyone's clicks. `direct` counts
+clicks written straight to the database (no Redis, or Redis unreachable).
 
 Each instance reports only its own numbers. `rateLimited` has one counter
 per limiter (`general`, `shorten`) once something has been rejected. In the

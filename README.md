@@ -31,12 +31,21 @@ Hosted on Render's free tier, so keep in mind:
   in-memory rate limiter, no Redis or Postgres. Everything new in the API
   (`PATCH`/`DELETE /api/links/:code`, `/healthz`, `/metrics`) works there too.
   The multi-instance setup runs with Docker Compose (below).
+- Editing or deleting a link needs the edit key that comes back when the link
+  is created. The page keeps it in your browser, so the Edit and Delete
+  buttons in "Links from this browser" just work.
 
 ## Features
 
-- `POST /api/shorten` with optional custom alias and optional expiry date
-- `GET /:code` does a 302 redirect and counts the click (404 if missing, 410 if expired)
-- `PATCH /api/links/:code` changes the target or expiry, `DELETE /api/links/:code` removes a link
+- `POST /api/shorten` with optional custom alias, optional expiry date, and an
+  `opaque` option for a random code that can't be found by counting
+- Every link gets a management token; only its SHA-256 is stored
+- `GET /:code` does a 302 redirect and counts the click (404 if missing, 410 if expired).
+  With Redis, clicks are counted in Redis and written to the database in batches
+- `PATCH /api/links/:code` changes the target or expiry, `DELETE /api/links/:code` removes a link.
+  Both need the link's token
+- Targets pointing at localhost, private networks or this service are rejected, and
+  can optionally be checked against Google Safe Browsing
 - `GET /api/stats/:code` shows clicks, created date and expiry
 - `GET /api/cache-stats` shows hits/misses for L1 and L2, and every redirect has an
   `X-Cache: HIT|MISS` header (plus `X-Cache-Level: L1|L2` on hits)
@@ -44,9 +53,10 @@ Hosted on Render's free tier, so keep in mind:
 - `GET /healthz` (database + Redis) and `GET /metrics` (JSON counters)
 - SQLite or PostgreSQL, picked with `DB_DRIVER`
 - Docker Compose setup: nginx, 2 app replicas, Postgres, Redis
-- 107 unit/API tests plus 23 integration tests against real Postgres and Redis,
+- 148 unit/API tests plus 26 integration tests against real Postgres and Redis,
   all run on GitHub Actions
-- Plain HTML/CSS/JS frontend: shorten a link, see your links and their click counts
+- Plain HTML/CSS/JS frontend, no build step: shorten a link, see your links and
+  their click counts, edit or delete them
 
 ## Demo
 
@@ -62,7 +72,8 @@ on each push; see the badge above.
 
 Four links: two counter codes (`1000`, `1001`), a custom alias (`lru-wiki`),
 and one with an expiry date (`node-intro`). The click counts come from real
-redirects.
+redirects. The panel at the top is the link just created; its edit key is
+hidden in the screenshot.
 
 ![Shortened link and my links table](docs/screenshots/02-shortened-link.png)
 
@@ -155,8 +166,9 @@ sequenceDiagram
             A->>L1: put
         end
     end
-    A->>P: UPDATE clicks = clicks + 1
+    A->>R: HINCRBY linklite:clicks:pending abc1 1
     A-->>C: 302 Location (or 410 if expired)
+    Note over A,P: every second: RENAME the pending hash,<br/>add it to links.clicks in one transaction
 ```
 
 ```
@@ -172,11 +184,15 @@ src/
   routes/redirect.js        /:code
   routes/ops.js             /healthz, /metrics
   services/linkService.js   ties the repository and the cache together
+  services/clickCounter.js  click buffer in Redis, batched writes to the database
+  services/safeBrowsing.js  optional Google Safe Browsing lookup
   middleware/rateLimiter.js shared bucket in Redis, local bucket as fallback
   utils/base62.js
   utils/lruCache.js
   utils/tokenBucket.js      in-memory token bucket
   utils/redisTokenBucket.js the same algorithm as a Lua script
+  utils/manageToken.js      management tokens and random codes
+  utils/urlPolicy.js        which target urls are allowed
 migrations/                 sql files for postgres
 nginx/nginx.conf            load balancer config
 scripts/                    migrate.js, loadtest.js
@@ -335,14 +351,124 @@ What this costs: codes are unique but no longer globally in order (app1 may
 be handing out `1000`-`101B` while app2 hands out `101C`-...), and ids left in
 a block when an instance stops are skipped. Neither matters for a shortener.
 
+**Codes nobody can guess.** Counter codes are easy to walk through: if
+`1a2B` exists, so does `1a2C`. For a link that shouldn't be found that way,
+send `"opaque": true` and the code is 10 random base62 characters from
+`crypto.randomBytes` (about 59 bits) instead. Bytes of 248 and up are thrown
+away, so every character is equally likely. A collision is retried, but with
+62^10 codes it's not something that happens in practice. The counter stays
+the default: it gives the shortest codes and never collides.
+
+## How clicks are counted
+
+`src/services/clickCounter.js`
+
+The caches only save the *read* on a redirect. Before this, every redirect
+still ran `UPDATE links SET clicks = clicks + 1`, so the database took one
+write per click no matter how good the hit rate was.
+
+With Redis configured, a redirect now does `HINCRBY linklite:clicks:pending
+<code> 1` and returns. Every second (`CLICK_FLUSH_MS`) each instance tries to
+flush:
+
+1. `RENAME` the pending hash to `linklite:clicks:batch:<time>-<uuid>`. The
+   rename is atomic, so new clicks start a fresh hash and the batch can't
+   change anymore. If two instances flush at the same moment, only one
+   rename finds the key.
+2. `HGETALL` the batch and add it to `links.clicks` in one transaction
+   (`UPDATE ... FROM unnest(codes, counts)`). The same transaction inserts
+   the batch id into a `click_batches` table.
+3. `DEL` the batch.
+
+What happens when something dies:
+
+| failure | result |
+|---|---|
+| app crashes before step 1 | clicks are still in Redis, the next flush on any instance takes them |
+| app crashes between 1 and 3 | the batch key stays in Redis. Every instance looks for batch keys older than 30s and applies them. If the crash was after `COMMIT`, the batch id is already in `click_batches`, so it isn't counted twice |
+| database down during a flush | the batch stays in Redis and is retried by the same scan |
+| Redis down on a redirect | that click is written straight to the database |
+| Redis itself crashes | clicks since the last AOF fsync are lost, about 1 second (`appendonly yes`, `appendfsync everysec` in `docker-compose.yml`) |
+
+So the counts are exact except for that last case. The pending hash has no
+ttl, so `volatile-lru` never evicts it. `GET /api/stats/:code` adds the
+pending count from Redis to the database value, so the stats page isn't a
+second behind. Without Redis (the live demo), each click is still a direct
+`UPDATE`, which in SQLite is an in-process call, not a network round trip.
+
+## Who can change a link
+
+`src/utils/manageToken.js`, `src/routes/api.js`
+
+There are no accounts, but knowing a short code is no longer enough to
+change or delete a link. `POST /api/shorten` returns a `manageToken`
+(24 random bytes, base64url). Only its SHA-256 is stored. `PATCH` and
+`DELETE` need it:
+
+```
+Authorization: Bearer <manageToken>
+```
+
+- no token: `401` with `WWW-Authenticate: Bearer`
+- wrong token, or a link created before tokens existed: `403`
+- the comparison uses `crypto.timingSafeEqual` on the hashes
+- the token is never in a redirect, the stats response or a log line
+
+A plain SHA-256 is enough here (no bcrypt): the token is 192 random bits, not
+a password a person picked, so there's nothing to brute force. The frontend
+stores the token in `localStorage` next to the code, which is how the Edit
+and Delete buttons work without a login.
+
+## Which targets are allowed
+
+`src/utils/urlPolicy.js`, `src/services/safeBrowsing.js`
+
+LinkLite never fetches a target URL itself. It only sends a `Location`
+header, so there's no server-side request to abuse (SSRF). If link previews
+were ever added, that code would need its own check after DNS resolution.
+
+It does refuse to hand out links that make no sense on a public shortener:
+
+- `localhost`, `*.local`, `*.internal`, single-label hosts like `http://intranet/`
+- private, loopback, link-local (including the cloud metadata address
+  `169.254.169.254`), CGNAT and multicast IPs, in v4 and v6, including
+  tricks like `http://0x7f.1/` and `http://[::ffff:127.0.0.1]/` (the URL
+  parser normalises those before the check)
+- a username or password in the URL (`https://paypal.com@evil.example`
+  actually goes to `evil.example`)
+- links to LinkLite itself, which would just make redirect chains
+
+Only literal IPs are checked, not what a hostname resolves to. That's fine
+because nothing fetches these URLs.
+
+**Google Safe Browsing (optional).** I looked through
+[public-apis](https://github.com/public-apis/public-apis) for something that
+fits a shortener. Google Safe Browsing (Lookup API v4) was the best match:
+free, covers phishing and malware, and the request only goes to Google, not
+to the target. URLhaus only covers malware, VirusTotal shares submitted URLs
+and allows 4 requests a minute, and the QR code APIs would send every short
+link to a third party. With `SAFE_BROWSING_API_KEY` set, new and edited
+targets are checked and flagged ones get a `400`. If Google is slow (2s
+timeout) or down, the link is allowed and the error is counted in
+`/metrics`, the same fail-open reasoning as the rate limiter. It only checks
+at write time; checking on every redirect would put an external call on the
+hot path.
+
+> **Licensing.** Google's terms limit the Safe Browsing API to
+> non-commercial use (not for sale or revenue-generating purposes). That
+> fits this portfolio project, which is why the check exists and is off by
+> default. It is **not** something to turn on in a commercial deployment as
+> is. A commercial service would need to review Google's current terms
+> itself, and Google points commercial users to its paid Web Risk API.
+
 ## API
 
 | Method | Path | Body | Success | Errors |
 |---|---|---|---|---|
-| POST | `/api/shorten` | `{ "url", "alias"?, "expiresAt"? }` | `201` link JSON | `400` invalid input, `409` alias taken, `429` |
+| POST | `/api/shorten` | `{ "url", "alias"?, "expiresAt"?, "opaque"? }` | `201` link JSON with `manageToken` | `400` invalid input, `409` alias taken, `429` |
 | GET | `/:code` | | `302` redirect, `X-Cache` header | `404` missing, `410` expired, `429` |
-| PATCH | `/api/links/:code` | `{ "url"?, "expiresAt"? }` | `200` link JSON | `400`, `404`, `429` |
-| DELETE | `/api/links/:code` | | `204` | `404`, `429` |
+| PATCH | `/api/links/:code` | `{ "url"?, "expiresAt"? }` + `Authorization: Bearer` | `200` link JSON | `400`, `401`, `403`, `404`, `429` |
+| DELETE | `/api/links/:code` | `Authorization: Bearer` | `204` | `401`, `403`, `404`, `429` |
 | GET | `/api/stats/:code` | | `200` `{ code, url, shortUrl, clicks, custom, createdAt, expiresAt, expired }` | `404` |
 | GET | `/api/cache-stats` | | `200` `{ capacity, size, hits, misses, hitRate, l1, l2 }` | |
 | GET | `/healthz` | | `200` `{ status, db, redis }` | `503` database down or shutting down |
@@ -350,15 +476,15 @@ a block when an instance stops are skipped. Neither matters for a shortener.
 
 Rules:
 
-- `url` must be `http` or `https`, max 2048 characters.
+- `url` must be `http` or `https`, max 2048 characters, and pass the target
+  policy above.
 - `alias` is 3-30 characters from `A-Z a-z 0-9 - _`. `api`, `index`, `stats`,
   `healthz` and `metrics` are reserved.
+- `opaque: true` gives a random 10 character code. It can't be combined with `alias`.
 - `expiresAt` is any date string `Date.parse` understands, and it must be in
   the future. It's stored as UTC ISO. In `PATCH`, `null` removes the expiry.
-
-There's no auth, so anyone can edit or delete any link, same as anyone can
-create one. Fine for a demo, it would need accounts or per-link tokens
-before real use.
+- Creating a link needs no auth, same as any public shortener. Changing or
+  deleting one needs its `manageToken`.
 
 Full request/response examples are in [docs/api.md](docs/api.md).
 
@@ -446,6 +572,8 @@ from `app2`.
 | `SHORTEN_LIMIT_CAPACITY` / `SHORTEN_LIMIT_REFILL` | `10` / `0.2` | write limiter |
 | `TRUST_PROXY` | `0` | set to `1` behind a reverse proxy so the real client IP is used |
 | `LOG_REQUESTS` | `1` | one log line per request |
+| `CLICK_FLUSH_MS` | `1000` | how often buffered clicks go from Redis to the database |
+| `SAFE_BROWSING_API_KEY` | | turns on the Google Safe Browsing check |
 | `INSTANCE_ID` | | shown in `X-Instance` and `/metrics` |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | |
 
@@ -456,8 +584,8 @@ npm test
 ```
 
 ```
-Test Suites: 8 passed, 8 total
-Tests:       107 passed, 107 total
+Test Suites: 10 passed, 10 total
+Tests:       148 passed, 148 total
 ```
 
 These need nothing installed. Redis is replaced by a small in-memory fake
@@ -473,8 +601,13 @@ block logic is tested with a fake pool.
   instances, Redis failing and coming back
 - `tests/redisRateLimiter.test.js`: the Lua call, `NOSCRIPT` fallback, headers, fallback to memory
 - `tests/ops.test.js`: `/healthz` states, `/metrics` counters
+- `tests/clickCounter.test.js`: batching, two instances flushing at once, Redis down,
+  database down, a batch applied twice after a crash (counted once), stale batch recovery
+- `tests/safeBrowsing.test.js`: request shape, matches, failing open on errors and timeouts
+  (link creation still works), the key never logged
 - `tests/api.test.js`: every endpoint against an in-memory SQLite database, including
-  404, 410, 409, 400 cases, cache HIT/MISS, the 429, and two app instances sharing a fake Redis
+  404, 410, 409, 400 cases, cache HIT/MISS, the 429, tokens (401/403, hash only),
+  opaque codes, blocked targets, and two app instances sharing a fake Redis
 
 ### Integration tests
 
@@ -492,14 +625,15 @@ npm run test:integration
 
 ```
 Test Suites: 3 passed, 3 total
-Tests:       23 passed, 23 total
+Tests:       26 passed, 26 total
 ```
 
 - `postgres.test.js`: migrations (including two runners at once), indexes,
-  200 concurrent creates from two repository instances with no duplicate code
+  200 concurrent creates from two repository instances with no duplicate code,
+  a click batch applied twice being counted once
 - `cache.test.js`: two app instances; L2 hit on the other instance, Redis ttl
   vs link expiry, an update on one instance clearing the other's L1, Redis
-  unreachable
+  unreachable, clicks on both instances flushed to Postgres exactly once
 - `rateLimit.test.js`: **requests alternated between two instances are
   limited to 5 in total, not 5 each** (and without Redis it's 10, the old
   behaviour); the Lua script under 200 concurrent calls, refill, key expiry,
@@ -530,21 +664,46 @@ Options: `--url` (default `http://localhost:8080`), `--duration` (seconds),
 
 ## Results
 
-Fill in after running the load test. Note the machine, since numbers from a
-laptop and from a t3.micro are very different.
+Measured on 2026-10-30 on my laptop: Intel Core Ultra 7 255H (16 threads),
+23 GB RAM, Windows 11, Docker Desktop (16 CPUs, ~11 GB for Docker). The load
+generator ran on the same machine, through nginx, against both app
+instances, with the Compose setup and the load test override above. Skew
+was the default 3. These are laptop numbers, a cloud VM will be different.
 
-Machine: _(e.g. laptop CPU / RAM, or EC2 instance type)_
-Command: `npm run loadtest -- --duration __ --connections __ --links __`
+**After batching clicks through Redis:**
 
-| metric | value |
-|---|---|
-| requests/sec (avg) | _ |
-| latency p50 | _ ms |
-| latency p95 | _ ms |
-| latency p99 | _ ms |
-| cache hit rate (L1 + L2) | _ % |
-| L1 hit rate | _ % |
-| errors / non-3xx | _ |
+| connections | links | duration | req/s | p50 | p95 | p99 | cache hit (L1 + L2) | L1 hit | errors / non-3xx |
+|---|---|---|---|---|---|---|---|---|---|
+| 50 | 500 | 30s | 2,911 | 14.9 ms | 37.3 ms | 62.0 ms | 100% | 98.8% | 0 |
+| 100 | 500 | 30s | 3,842 | 23.8 ms | 49.7 ms | 66.9 ms | 100% | 99.1% | 0 |
+| 50 | 2,000 | 60s | 3,513 | 13.0 ms | 28.5 ms | 42.8 ms | 100% | 72.0% | 0 |
+| 100 | 2,000 | 60s | 3,885 | 23.5 ms | 49.6 ms | 70.7 ms | 100% | 72.0% | 0 |
+
+**Before, with one `UPDATE` per click** (same machine, run right before the change):
+
+| connections | links | duration | req/s | p50 | p95 | p99 | cache hit (L1 + L2) | L1 hit | errors / non-3xx |
+|---|---|---|---|---|---|---|---|---|---|
+| 50 | 500 | 30s | 2,540 | 18.6 ms | 34.3 ms | 48.3 ms | 100% | 98.7% | 0 |
+| 100 | 2,000 | 60s | 2,216 | 40.9 ms | 91.1 ms | 131.4 ms | 100% | 71.5% | 0 |
+
+What I read from this:
+
+- At 100 connections and 2,000 links throughput went from 2,216 to 3,885
+  req/s (+75%), and p99 from 131 ms to 71 ms. Before, adding connections
+  made things *slower* (2,540 to 2,216 req/s), because every redirect waited
+  on a Postgres write. Now it scales up instead.
+- At 50 connections and 500 links the gain is smaller (+15%), and p95/p99
+  are a bit higher than before. With few connections Postgres wasn't the
+  bottleneck yet, and both runs are on a laptop that is also running the
+  load generator, so I wouldn't read much into a 14 ms p99 difference.
+- No request in any run read the database: every redirect was an L1 or L2
+  hit. With 2,000 links, 28% of lookups missed L1 (60s ttl, two instances
+  each warming their own copy) and were served from Redis.
+- Clicks are not lost by batching: after the four runs Postgres had 646,671
+  clicks, autocannon counted 646,371 responses. The 300 difference is
+  exactly 50+100+50+100, the requests still in flight on each connection
+  when each run stopped, which the app served and counted but autocannon
+  didn't tally. The Redis pending hash was empty.
 
 ## Design trade-offs
 
@@ -558,10 +717,10 @@ Command: `npm run loadtest -- --duration __ --connections __ --links __`
   if the counter lands on a code that's already taken as an alias, it skips it.
 - With several instances, ids come in blocks per instance (see above), so
   the counter row is touched once per 100 links instead of once per link.
-- Downside: codes are guessable and show how many links exist. If that matters,
-  you can shuffle the counter with a bijective function (multiply by a large
-  odd number mod 62^n, or Feistel rounds). You keep uniqueness and the codes
-  stop looking sequential.
+- Downside: codes are guessable and show how many links exist. For links
+  where that matters there's `opaque: true` (random codes, see above). I kept
+  the counter as the default instead of replacing it, because it still gives
+  the shortest codes with no collisions.
 
 **Why LRU for the cache**
 
@@ -606,9 +765,9 @@ looser (up to N times) but never disappears and never blocks everyone.
 
 **Limits of this design**
 
-- Click counting is still a database `UPDATE` on every redirect, so the
-  caches only save the read. For heavy traffic, counts should be buffered in
-  memory or Redis (`INCR`) and written in batches, or sent to a queue.
+- Clicks are batched through Redis, but a Redis crash can still lose about a
+  second of them (see the table above). For analytics that must be exact,
+  click events would go to a durable queue (Kafka/SQS) instead.
 - The rate limiter keys on IP. Users behind one NAT share a bucket, and the
   limit is only as good as the `X-Forwarded-For` handling (nginx overwrites
   it, and the app trusts exactly one proxy hop).
@@ -616,14 +775,17 @@ looser (up to N times) but never disappears and never blocks everyone.
   setup would use Prometheus format and scrape every instance.
 - Postgres is a single primary. Read replicas would help the stats page,
   but redirects mostly never reach the database anyway.
-- No auth on create/update/delete, and no check for malicious target URLs.
-- "My links" in the UI is just a list of codes in `localStorage`.
+- Link ownership is a per-link token, not accounts. Lose the token (clear the
+  browser storage) and the link can't be edited anymore.
+- Safe Browsing is checked when a link is created or edited, not on each
+  redirect, so a site that turns bad later isn't caught.
+- "My links" in the UI is a list of codes and tokens in `localStorage`.
 
 **What I'd do next**
 
-1. Buffer click counts in Redis and flush them to Postgres in batches.
-2. Prometheus metrics and a Grafana dashboard instead of the JSON endpoint.
-3. Send click events to a queue (Kafka/SQS) for analytics.
+1. Prometheus metrics and a Grafana dashboard instead of the JSON endpoint.
+2. Send click events to a queue (Kafka/SQS) for analytics.
+3. Accounts, so links and tokens aren't tied to one browser.
 4. A CDN in front for the hottest redirects (with a short cache time, since
    a cached redirect isn't counted).
 
