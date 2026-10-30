@@ -25,7 +25,7 @@ function testUrls() {
 async function resetDatabase(databaseUrl) {
   const pool = new Pool({ connectionString: databaseUrl, max: 1 });
   try {
-    await pool.query('DROP TABLE IF EXISTS links, id_counter, schema_migrations');
+    await pool.query('DROP TABLE IF EXISTS links, id_counter, click_batches, schema_migrations');
     await migrate(pool);
   } finally {
     await pool.end();

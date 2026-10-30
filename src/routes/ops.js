@@ -19,7 +19,7 @@ async function check(fn) {
 
 // /healthz and /metrics. Mounted before the rate limiter and request logging,
 // so load balancer probes are never throttled and don't flood the logs.
-function opsRouter({ repo, redis, cache, metrics, isShuttingDown }) {
+function opsRouter({ repo, redis, cache, clicks, safeBrowsing, metrics, isShuttingDown }) {
   const router = express.Router();
 
   // 503 only when this instance can't serve redirects (no database) or is
@@ -45,6 +45,8 @@ function opsRouter({ repo, redis, cache, metrics, isShuttingDown }) {
     res.set('Cache-Control', 'no-store').json(
       metrics.snapshot({
         cache: cache.stats(),
+        clicks: clicks.stats(),
+        safeBrowsing: safeBrowsing.stats(),
         storage: { driver: repo.driver },
         redis: redis ? { enabled: true, status: redis.status } : { enabled: false },
       })

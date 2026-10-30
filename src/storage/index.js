@@ -2,9 +2,12 @@ const { createSqliteRepository } = require('./sqliteRepository');
 const { createPostgresRepository } = require('./postgresRepository');
 
 // Every repository has the same async interface:
-//   createLink({ url, alias, expiresAt }) -> link   (409 error if alias is taken)
+//   createLink({ url, alias?, code?, expiresAt?, manageTokenHash? })
+//                                         -> link   (409 error if alias/code is taken)
 //   findByCode(code)                      -> link | null
+//   findManageTokenHash(code)             -> { hash } | null
 //   incrementClicks(code)
+//   applyClickBatch(batchId, { code: n }) -> false if the batch was applied before
 //   updateLink(code, { url?, expiresAt? }) -> link | null   (expiresAt: null clears it)
 //   deleteLink(code)                      -> boolean
 //   ping(), close()

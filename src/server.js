@@ -28,6 +28,8 @@ const app = createApp({
   trustProxy: env.TRUST_PROXY === '1',
   logRequests: env.LOG_REQUESTS !== '0',
   instanceId: env.INSTANCE_ID || undefined,
+  clickFlushMs: num(env.CLICK_FLUSH_MS, 1000),
+  safeBrowsingApiKey: env.SAFE_BROWSING_API_KEY || undefined,
 });
 
 const shutdownTimeoutMs = num(env.SHUTDOWN_TIMEOUT_MS, 10_000);

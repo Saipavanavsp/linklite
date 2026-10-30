@@ -51,11 +51,15 @@ describe('two instances, shared postgres and redis', () => {
   });
 
   test("an update on A removes the cached copy from L2 and from B's L1", async () => {
-    await request(a).post('/api/shorten').send({ url: 'https://old.com', alias: 'shared' });
+    const { body } = await request(a).post('/api/shorten').send({ url: 'https://old.com', alias: 'shared' });
     await request(b).get('/shared').expect('Location', 'https://old.com');
     await request(b).get('/shared').expect('X-Cache-Level', 'L1');
 
-    await request(a).patch('/api/links/shared').send({ url: 'https://new.com' }).expect(200);
+    await request(a)
+      .patch('/api/links/shared')
+      .set('Authorization', `Bearer ${body.manageToken}`)
+      .send({ url: 'https://new.com' })
+      .expect(200);
     expect(await redis.get(KEY_PREFIX + 'shared')).toBeNull();
 
     // pub/sub delivery is asynchronous
@@ -66,14 +70,28 @@ describe('two instances, shared postgres and redis', () => {
   });
 
   test('a delete on A makes the link 404 on B', async () => {
-    await request(a).post('/api/shorten').send({ url: 'https://a.com', alias: 'temp' });
+    const { body } = await request(a).post('/api/shorten').send({ url: 'https://a.com', alias: 'temp' });
     await request(b).get('/temp').expect(302);
     await request(b).get('/temp').expect(302);
 
-    await request(a).delete('/api/links/temp').expect(204);
+    await request(a).delete('/api/links/temp').expect(401);
+    await request(a).delete('/api/links/temp').set('Authorization', `Bearer ${body.manageToken}`).expect(204);
     await eventually(async () => {
       await request(b).get('/temp').expect(404);
     });
+  });
+
+  test('clicks on both instances are buffered in redis and flushed to postgres once', async () => {
+    const { body } = await request(a).post('/api/shorten').send({ url: 'https://example.com' });
+    for (let i = 0; i < 10; i++) await request(i % 2 ? a : b).get(`/${body.code}`).expect(302);
+
+    const { body: stats } = await request(a).get(`/api/stats/${body.code}`);
+    expect(stats.clicks).toBe(10);
+
+    await Promise.all([a.locals.clicks.flush(), b.locals.clicks.flush()]);
+    const row = await a.locals.repo.findByCode(body.code);
+    expect(row.clicks).toBe(10);
+    expect(await redis.exists('linklite:clicks:pending')).toBe(0);
   });
 });
 

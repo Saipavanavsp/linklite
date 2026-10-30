@@ -18,6 +18,20 @@ function shorten(app, body) {
   return request(app).post('/api/shorten').send(body);
 }
 
+// creates a link and returns { code, token } for PATCH/DELETE
+async function own(app, body) {
+  const res = await shorten(app, body).expect(201);
+  return { code: res.body.code, token: res.body.manageToken };
+}
+
+function patch(app, { code, token }, body) {
+  return request(app).patch(`/api/links/${code}`).set('Authorization', `Bearer ${token}`).send(body);
+}
+
+function remove(app, { code, token }) {
+  return request(app).delete(`/api/links/${code}`).set('Authorization', `Bearer ${token}`);
+}
+
 describe('POST /api/shorten', () => {
   let app;
   beforeEach(() => {
@@ -37,6 +51,26 @@ describe('POST /api/shorten', () => {
       expiresAt: null,
     });
     expect(new Date(res.body.createdAt).toString()).not.toBe('Invalid Date');
+    expect(res.body.manageToken).toMatch(/^[A-Za-z0-9_-]{32}$/);
+  });
+
+  test('opaque links get a random 10 character code instead of the next counter value', async () => {
+    const res = await shorten(app, { url: 'https://example.com/private', opaque: true }).expect(201);
+    expect(res.body.code).toMatch(/^[A-Za-z0-9]{10}$/);
+    expect(res.body.custom).toBe(false);
+    await request(app).get(`/${res.body.code}`).expect(302).expect('Location', 'https://example.com/private');
+
+    // the counter wasn't used
+    const next = await shorten(app, { url: 'https://example.com/public' });
+    expect(next.body.code).toBe('1000');
+  });
+
+  test('two opaque links never get the same code', async () => {
+    const codes = new Set();
+    for (let i = 0; i < 20; i++) {
+      codes.add((await shorten(app, { url: 'https://example.com', opaque: true })).body.code);
+    }
+    expect(codes.size).toBe(20);
   });
 
   test('codes are sequential', async () => {
@@ -79,9 +113,29 @@ describe('POST /api/shorten', () => {
     [{ url: 'https://example.com', alias: 'API' }, /reserved/],
     [{ url: 'https://example.com', expiresAt: 'tomorrow-ish' }, /valid date/],
     [{ url: 'https://example.com', expiresAt: '2000-01-01T00:00:00Z' }, /in the future/],
+    [{ url: 'https://example.com', opaque: 'yes' }, /opaque must be/],
+    [{ url: 'https://example.com', opaque: true, alias: 'mine' }, /either alias or opaque/],
+    [{ url: 'http://localhost:8080/admin' }, /private networks/],
+    [{ url: 'http://127.0.0.1/' }, /private networks/],
+    [{ url: 'http://0x7f.1/' }, /private networks/],
+    [{ url: 'http://10.1.2.3/' }, /private networks/],
+    [{ url: 'http://192.168.1.1/' }, /private networks/],
+    [{ url: 'http://169.254.169.254/latest/meta-data/' }, /private networks/],
+    [{ url: 'http://[::1]/' }, /private networks/],
+    [{ url: 'http://[::ffff:127.0.0.1]/' }, /private networks/],
+    [{ url: 'http://[fd00::1]/' }, /private networks/],
+    [{ url: 'http://router.local/' }, /private networks/],
+    [{ url: 'http://intranet/' }, /private networks/],
+    [{ url: 'https://paypal.com@evil.example/' }, /username or password/],
+    [{ url: `${BASE_URL}/1000` }, /link to this service/],
   ])('rejects %j', async (body, message) => {
     const res = await shorten(app, body).expect(400);
     expect(res.body.error).toMatch(message);
+  });
+
+  test('allows public hosts and IPs', async () => {
+    await shorten(app, { url: 'http://93.184.215.14/page' }).expect(201);
+    await shorten(app, { url: 'https://sub.example.co.uk:8443/a?b=c#d' }).expect(201);
   });
 
   test('rejects malformed JSON', async () => {
@@ -149,7 +203,7 @@ describe('GET /api/stats/:code', () => {
   });
   afterEach(() => app.locals.db.close());
 
-  test('returns clicks, created date and expiry', async () => {
+  test('returns clicks, created date and expiry, never the token', async () => {
     const expiresAt = new Date(Date.now() + 86400_000).toISOString();
     const { body } = await shorten(app, { url: 'https://example.com', alias: 'stats-me', expiresAt });
 
@@ -196,62 +250,125 @@ describe('PATCH /api/links/:code', () => {
   afterEach(() => app.locals.db.close());
 
   test('changes the target and the next redirect uses it, even if it was cached', async () => {
-    await shorten(app, { url: 'https://old.com', alias: 'moving' });
+    const link = await own(app, { url: 'https://old.com', alias: 'moving' });
     await request(app).get('/moving').expect(302).expect('Location', 'https://old.com');
     await request(app).get('/moving').expect('X-Cache', 'HIT');
 
-    const res = await request(app).patch('/api/links/moving').send({ url: 'https://new.com' }).expect(200);
+    const res = await patch(app, link, { url: 'https://new.com' }).expect(200);
     expect(res.body).toMatchObject({ code: 'moving', url: 'https://new.com', shortUrl: `${BASE_URL}/moving` });
+    expect(res.body.manageToken).toBeUndefined();
 
     await request(app).get('/moving').expect(302).expect('Location', 'https://new.com').expect('X-Cache', 'MISS');
   });
 
   test('sets and clears the expiry', async () => {
-    await shorten(app, { url: 'https://a.com', alias: 'timed' });
+    const link = await own(app, { url: 'https://a.com', alias: 'timed' });
     const expiresAt = new Date(Date.now() + 3600_000).toISOString();
 
-    let res = await request(app).patch('/api/links/timed').send({ expiresAt }).expect(200);
+    let res = await patch(app, link, { expiresAt }).expect(200);
     expect(res.body.expiresAt).toBe(expiresAt);
 
-    res = await request(app).patch('/api/links/timed').send({ expiresAt: null }).expect(200);
+    res = await patch(app, link, { expiresAt: null }).expect(200);
     expect(res.body.expiresAt).toBeNull();
   });
 
   test('un-expires a link that was returning 410', async () => {
-    const { body } = await shorten(app, { url: 'https://a.com', expiresAt: new Date(Date.now() + 3600_000).toISOString() });
-    app.locals.db.prepare('UPDATE links SET expires_at = ? WHERE code = ?').run('2000-01-01T00:00:00.000Z', body.code);
-    await request(app).get(`/${body.code}`).expect(410);
+    const link = await own(app, { url: 'https://a.com', expiresAt: new Date(Date.now() + 3600_000).toISOString() });
+    app.locals.db.prepare('UPDATE links SET expires_at = ? WHERE code = ?').run('2000-01-01T00:00:00.000Z', link.code);
+    await request(app).get(`/${link.code}`).expect(410);
 
-    await request(app).patch(`/api/links/${body.code}`).send({ expiresAt: null }).expect(200);
-    await request(app).get(`/${body.code}`).expect(302);
+    await patch(app, link, { expiresAt: null }).expect(200);
+    await request(app).get(`/${link.code}`).expect(302);
   });
 
   test.each([
     [{}, /nothing to update/],
     [{ url: 'ftp://x.com' }, /only http and https/],
+    [{ url: 'http://192.168.0.1/' }, /private networks/],
     [{ expiresAt: '2000-01-01T00:00:00Z' }, /in the future/],
   ])('rejects %j', async (body, message) => {
-    await shorten(app, { url: 'https://a.com', alias: 'valid' });
-    const res = await request(app).patch('/api/links/valid').send(body).expect(400);
+    const link = await own(app, { url: 'https://a.com', alias: 'valid' });
+    const res = await patch(app, link, body).expect(400);
     expect(res.body.error).toMatch(message);
   });
 
   test('returns 404 for unknown codes', async () => {
-    await request(app).patch('/api/links/nothing').send({ url: 'https://a.com' }).expect(404);
+    await patch(app, { code: 'nothing', token: 'x' }, { url: 'https://a.com' }).expect(404);
+  });
+
+  test('401 without a token, 403 with the wrong one, and the link is unchanged', async () => {
+    const mine = await own(app, { url: 'https://mine.com', alias: 'mine' });
+    const theirs = await own(app, { url: 'https://theirs.com', alias: 'theirs' });
+
+    const noToken = await request(app).patch('/api/links/mine').send({ url: 'https://evil.example' }).expect(401);
+    expect(noToken.headers['www-authenticate']).toBe('Bearer');
+
+    // someone else's valid token doesn't work on my link
+    await patch(app, { code: 'mine', token: theirs.token }, { url: 'https://evil.example' }).expect(403);
+    await patch(app, { code: 'mine', token: 'guess' }, { url: 'https://evil.example' }).expect(403);
+    await request(app).patch('/api/links/mine').set('Authorization', mine.token).send({ url: 'https://x.com' }).expect(401);
+
+    const stats = await request(app).get('/api/stats/mine');
+    expect(stats.body.url).toBe('https://mine.com');
+  });
+
+  test('links created before tokens existed cannot be edited', async () => {
+    const link = await own(app, { url: 'https://old.com', alias: 'legacy' });
+    app.locals.db.prepare('UPDATE links SET manage_token_hash = NULL WHERE code = ?').run('legacy');
+    await patch(app, link, { url: 'https://new.com' }).expect(403);
+  });
+
+  test('only a hash of the token is stored', async () => {
+    const link = await own(app, { url: 'https://a.com', alias: 'hashed' });
+    const row = app.locals.db.prepare('SELECT * FROM links WHERE code = ?').get('hashed');
+    expect(row.manage_token_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(row)).not.toContain(link.token);
   });
 });
 
 describe('DELETE /api/links/:code', () => {
   test('deletes the link and evicts it from the cache', async () => {
     const app = makeApp();
-    await shorten(app, { url: 'https://a.com', alias: 'bye-bye' });
+    const link = await own(app, { url: 'https://a.com', alias: 'bye-bye' });
     await request(app).get('/bye-bye').expect(302);
     await request(app).get('/bye-bye').expect('X-Cache', 'HIT');
 
-    await request(app).delete('/api/links/bye-bye').expect(204);
+    await remove(app, link).expect(204);
     await request(app).get('/bye-bye').expect(404);
     await request(app).get('/api/stats/bye-bye').expect(404);
-    await request(app).delete('/api/links/bye-bye').expect(404);
+    await remove(app, link).expect(404);
+    app.locals.db.close();
+  });
+
+  test('needs the right token', async () => {
+    const app = makeApp();
+    await own(app, { url: 'https://a.com', alias: 'keep-me' });
+    await request(app).delete('/api/links/keep-me').expect(401);
+    await remove(app, { code: 'keep-me', token: 'wrong' }).expect(403);
+    await request(app).get('/keep-me').expect(302);
+    app.locals.db.close();
+  });
+});
+
+describe('Google Safe Browsing check', () => {
+  function fakeSafeBrowsing(flagged) {
+    return {
+      enabled: true,
+      async check(url) {
+        return flagged.includes(url) ? { safe: false, threat: 'SOCIAL_ENGINEERING' } : { safe: true };
+      },
+      stats: () => ({ enabled: true }),
+    };
+  }
+
+  test('flagged urls are rejected on create and on update', async () => {
+    const app = makeApp({ safeBrowsing: fakeSafeBrowsing(['https://phish.example/login']) });
+
+    const res = await shorten(app, { url: 'https://phish.example/login' }).expect(400);
+    expect(res.body.error).toMatch(/Safe Browsing \(SOCIAL_ENGINEERING\)/);
+
+    const link = await own(app, { url: 'https://fine.example' });
+    await patch(app, link, { url: 'https://phish.example/login' }).expect(400);
     app.locals.db.close();
   });
 });
@@ -285,15 +402,33 @@ describe('two instances sharing a cache (fake redis)', () => {
   test('an update on one instance clears the L1 copy on the other', async () => {
     const { a, b, repo } = makePair();
     await Promise.all([a.locals.ready, b.locals.ready]);
-    await shorten(a, { url: 'https://old.com', alias: 'shared' });
+    const link = await own(a, { url: 'https://old.com', alias: 'shared' });
 
     await request(b).get('/shared').expect('Location', 'https://old.com');
     await request(b).get('/shared').expect('X-Cache-Level', 'L1');
 
-    await request(a).patch('/api/links/shared').send({ url: 'https://new.com' }).expect(200);
+    await patch(a, link, { url: 'https://new.com' }).expect(200);
     await flush();
 
     await request(b).get('/shared').expect('Location', 'https://new.com').expect('X-Cache', 'MISS');
+    await repo.close();
+  });
+
+  test('clicks are buffered in redis, show up in stats right away, and reach the db on flush', async () => {
+    const { a, b, repo } = makePair();
+    const { body } = await shorten(a, { url: 'https://example.com' });
+
+    await request(a).get(`/${body.code}`).expect(302);
+    await request(b).get(`/${body.code}`).expect(302);
+    await request(b).get(`/${body.code}`).expect(302);
+
+    // nothing in the db yet, but stats adds what's pending in redis
+    expect((await repo.findByCode(body.code)).clicks).toBe(0);
+    expect((await request(a).get(`/api/stats/${body.code}`)).body.clicks).toBe(3);
+
+    await Promise.all([a.locals.clicks.flush(), b.locals.clicks.flush()]);
+    expect((await repo.findByCode(body.code)).clicks).toBe(3);
+    expect((await request(b).get(`/api/stats/${body.code}`)).body.clicks).toBe(3);
     await repo.close();
   });
 });

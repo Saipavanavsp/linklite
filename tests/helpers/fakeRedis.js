@@ -56,6 +56,47 @@ class FakeRedis extends EventEmitter {
     return this.server.data.delete(key) ? 1 : 0;
   }
 
+  async hincrby(key, field, by) {
+    this._check();
+    let entry = this._entry(key);
+    if (!entry) {
+      entry = { value: new Map(), expiresAt: Infinity };
+      this.server.data.set(key, entry);
+    }
+    const next = Number(entry.value.get(field) || 0) + by;
+    entry.value.set(field, String(next));
+    return next;
+  }
+
+  async hget(key, field) {
+    this._check();
+    const entry = this._entry(key);
+    return (entry && entry.value.get(field)) ?? null;
+  }
+
+  async hgetall(key) {
+    this._check();
+    const entry = this._entry(key);
+    return entry ? Object.fromEntries(entry.value) : {};
+  }
+
+  async rename(from, to) {
+    this._check();
+    const entry = this._entry(from);
+    if (!entry) throw new Error('ERR no such key');
+    this.server.data.delete(from);
+    this.server.data.set(to, entry);
+    return 'OK';
+  }
+
+  // returns every match in one page, which is allowed by the SCAN contract
+  async scan(cursor, match, pattern) {
+    this._check();
+    const prefix = pattern.replace(/\*$/, '');
+    const keys = [...this.server.data.keys()].filter((k) => k.startsWith(prefix) && this._entry(k));
+    return ['0', keys];
+  }
+
   async pttl(key) {
     this._check();
     const entry = this._entry(key);

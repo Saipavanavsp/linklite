@@ -17,13 +17,13 @@ describe('postgres schema', () => {
   test('migrations are recorded and running them again does nothing', async () => {
     expect(await migrate(pool)).toEqual([]);
     const { rows } = await pool.query('SELECT name FROM schema_migrations');
-    expect(rows.map((r) => r.name)).toEqual(['001_init.sql']);
+    expect(rows.map((r) => r.name).sort()).toEqual(['001_init.sql', '002_manage_tokens_and_click_batches.sql']);
   });
 
   test('two runners at once do not both apply the same migration', async () => {
-    await pool.query('DROP TABLE IF EXISTS links, id_counter, schema_migrations');
+    await pool.query('DROP TABLE IF EXISTS links, id_counter, click_batches, schema_migrations');
     const results = await Promise.all([migrate(pool), migrate(pool)]);
-    expect(results.flat()).toEqual(['001_init.sql']);
+    expect(results.flat()).toEqual(['001_init.sql', '002_manage_tokens_and_click_batches.sql']);
   });
 
   test('code has a unique index and expires_at a partial index', async () => {
@@ -65,6 +65,29 @@ describe('postgres repository', () => {
 
     expect(await r.deleteLink('1000')).toBe(true);
     expect(await r.findByCode('1000')).toBeNull();
+  });
+
+  test('a click batch is applied once even if it is sent twice', async () => {
+    const r = repo();
+    await r.createLink({ url: 'https://a.com', alias: 'one' });
+    await r.createLink({ url: 'https://b.com', alias: 'two' });
+
+    expect(await r.applyClickBatch('0000000000001-x', { one: '3', two: '1', gone: '5' })).toBe(true);
+    expect(await r.applyClickBatch('0000000000001-x', { one: '3', two: '1' })).toBe(false);
+    expect((await r.findByCode('one')).clicks).toBe(3);
+    expect((await r.findByCode('two')).clicks).toBe(1);
+
+    // old batch ids are pruned
+    await r.applyClickBatch('0000000000009-y', { one: '1' }, { pruneBefore: '0000000000005' });
+    const { rows } = await r.pool.query('SELECT id FROM click_batches ORDER BY id');
+    expect(rows.map((row) => row.id)).toEqual(['0000000000009-y']);
+  });
+
+  test('stores only the hash of the management token', async () => {
+    const r = repo();
+    await r.createLink({ url: 'https://a.com', alias: 'tok', manageTokenHash: 'ab'.repeat(32) });
+    expect(await r.findManageTokenHash('tok')).toEqual({ hash: 'ab'.repeat(32) });
+    expect(await r.findManageTokenHash('nope')).toBeNull();
   });
 
   test('alias conflicts are a 409', async () => {

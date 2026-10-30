@@ -19,7 +19,7 @@ function createMetrics({ instanceId, now = Date.now } = {}) {
     rateLimited[limiter] = (rateLimited[limiter] || 0) + 1;
   }
 
-  function snapshot({ cache, storage, redis }) {
+  function snapshot({ cache, clicks, safeBrowsing, storage, redis }) {
     const limitedTotal = Object.values(rateLimited).reduce((sum, n) => sum + n, 0);
     return {
       instance: instanceId,
@@ -27,6 +27,8 @@ function createMetrics({ instanceId, now = Date.now } = {}) {
       requests,
       rateLimited: { ...rateLimited, total: limitedTotal },
       cache,
+      clicks,
+      safeBrowsing,
       storage,
       redis,
     };

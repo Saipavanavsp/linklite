@@ -25,6 +25,8 @@ x-app: &app
     SHORTEN_LIMIT_CAPACITY: ${SHORTEN_LIMIT_CAPACITY:-10}
     SHORTEN_LIMIT_REFILL: ${SHORTEN_LIMIT_REFILL:-0.2}
     LOG_REQUESTS: ${LOG_REQUESTS:-1}
+    CLICK_FLUSH_MS: ${CLICK_FLUSH_MS:-1000}
+    SAFE_BROWSING_API_KEY: ${SAFE_BROWSING_API_KEY:-}
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -51,8 +53,19 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    # every key the app writes has a ttl, so volatile-lru can evict any of them
-    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru"]
+    # Cache entries and rate limit buckets have a ttl, so volatile-lru can
+    # evict them. The click buffer has none and is never evicted. AOF with an
+    # fsync every second means a Redis crash loses at most ~1s of clicks.
+    command:
+      - redis-server
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - volatile-lru
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
     volumes:
       - redisdata:/data
     healthcheck:

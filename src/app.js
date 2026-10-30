@@ -6,6 +6,8 @@ const { TieredCache } = require('./cache/tieredCache');
 const { createRedisClient, closeRedis } = require('./redis');
 const throttledLog = require('./utils/throttledLog');
 const { createLinkService } = require('./services/linkService');
+const { createClickCounter } = require('./services/clickCounter');
+const { createSafeBrowsing } = require('./services/safeBrowsing');
 const { createMetrics } = require('./metrics');
 const rateLimiter = require('./middleware/rateLimiter');
 const opsRouter = require('./routes/ops');
@@ -34,6 +36,10 @@ function createApp(options = {}) {
     logRequests = false,
     logger = console,
     instanceId,
+    // how often buffered clicks go from Redis to the database (only with Redis)
+    clickFlushMs = 1000,
+    safeBrowsingApiKey,
+    safeBrowsing: injectedSafeBrowsing,
   } = options;
 
   const repo =
@@ -59,7 +65,10 @@ function createApp(options = {}) {
     subscribed = cache.subscribe(subscriber);
   }
 
-  const links = createLinkService(repo, cache);
+  const clicks = createClickCounter({ repo, redis, flushMs: clickFlushMs, logger });
+  clicks.start();
+  const links = createLinkService(repo, cache, clicks);
+  const safeBrowsing = injectedSafeBrowsing || createSafeBrowsing({ apiKey: safeBrowsingApiKey, logger });
 
   const metrics = createMetrics({ instanceId });
 
@@ -76,7 +85,9 @@ function createApp(options = {}) {
     });
   }
 
-  app.use(opsRouter({ repo, redis, cache, metrics, isShuttingDown: () => app.locals.shuttingDown }));
+  app.use(
+    opsRouter({ repo, redis, cache, clicks, safeBrowsing, metrics, isShuttingDown: () => app.locals.shuttingDown })
+  );
   app.use(metrics.middleware);
 
   if (logRequests) {
@@ -96,7 +107,7 @@ function createApp(options = {}) {
   app.use(express.json({ limit: '10kb' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
-  app.use('/api', apiRouter({ links, cache, baseUrl, shortenLimit, limiterOptions }));
+  app.use('/api', apiRouter({ links, cache, baseUrl, shortenLimit, limiterOptions, safeBrowsing }));
   app.use(redirectRouter({ links }));
 
   app.use((req, res) => {
@@ -114,9 +125,12 @@ function createApp(options = {}) {
   app.locals.db = repo.db;
   app.locals.repo = repo;
   app.locals.cache = cache;
+  app.locals.clicks = clicks;
   app.locals.redis = redis;
   app.locals.ready = subscribed;
   app.locals.close = async () => {
+    // flush buffered clicks while Redis and the DB are still open
+    await clicks.stop();
     await cache.close();
     if (!injectedRedis) await closeRedis(redis);
     await repo.close();
