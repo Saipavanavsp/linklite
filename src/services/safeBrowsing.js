@@ -7,6 +7,10 @@ const THREAT_TYPES = ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE', 'POT
 // created or its target changed. Only Google is contacted, the destination
 // itself is never fetched. Off unless SAFE_BROWSING_API_KEY is set.
 //
+// Google's terms allow this API for non-commercial use only. Fine for this
+// project; a commercial deployment would have to review the terms first
+// (Google points commercial users to its Web Risk API).
+//
 // If Google is slow or down, the link is allowed (fail open), for the same
 // reason as the rate limiter: an outage somewhere else shouldn't stop people
 // from shortening links. The failure is counted and logged.

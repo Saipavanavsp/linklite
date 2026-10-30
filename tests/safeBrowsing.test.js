@@ -53,4 +53,32 @@ describe('safe browsing', () => {
     expect(sb.stats().errors).toBe(1);
     expect(warnings.join(' ')).not.toContain('secret-key');
   });
+
+  test('gives up after the timeout and allows the url', async () => {
+    // never answers, only stops when the abort signal fires
+    const hanging = (url, init) =>
+      new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+    const sb = createSafeBrowsing({ apiKey: 'k', fetch: hanging, timeoutMs: 50, logger: quiet });
+
+    const started = Date.now();
+    expect(await sb.check('https://a.com')).toEqual({ safe: true });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(sb.stats().errors).toBe(1);
+  });
+
+  test('a hanging Safe Browsing API does not stop link creation', async () => {
+    const request = require('supertest');
+    const createApp = require('../src/app');
+    const hanging = (url, init) =>
+      new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+    const app = createApp({
+      safeBrowsing: createSafeBrowsing({ apiKey: 'k', fetch: hanging, timeoutMs: 50, logger: quiet }),
+      logger: quiet,
+    });
+
+    await request(app).post('/api/shorten').send({ url: 'https://example.com' }).expect(201);
+    const metrics = await request(app).get('/metrics');
+    expect(metrics.body.safeBrowsing).toMatchObject({ enabled: true, errors: 1 });
+    await app.locals.close();
+  });
 });
